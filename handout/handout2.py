@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-class Block:
+class Block: # these lcasses go to blocks.py
     pass
 
 @dataclass
@@ -18,7 +18,7 @@ class Message(Block):
 
 
 @dataclass
-class Document:
+class Document: # internal representation of exportable document contents
     title: str
     blocks: [Block]
 
@@ -27,21 +27,27 @@ class Exporter:
     def __init__(self, directory, document):
         self._directory = directory
         self._document = document
+
+    def render(self):
+        raise NotImplementedError
+
+    def save(self):
+        raise NotImplementedError
     
 
 class HtmlExporter(Exporter):        
-    def header(self):
+    def _header(self):
         # will use self.doc.title        
         return "<html><body>"
         
-    def body(self): # can be templated
+    def _body(self): # can be templated
         return "\n".join([block.html() for block in self._document.blocks]) 
     
-    def footer(self):
+    def _footer(self):
         return "</body></html>"
 
     def render(self):
-        return "\n".join([self.header(), self.body(), self.footer()])
+        return "\n".join([self._header(), self._body(), self._footer()])
 
     def save(self):
         # html will save a ton of files - must work in a directory
