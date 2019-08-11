@@ -9,7 +9,7 @@ class ExtendableBlock(Block):
   def __init__(self, lines=None):
     self._lines = lines or []
 
-  def append(self, line):
+  def append_line(self, line):
     self._lines.append(line)
     
   def __eq__(self, x):
@@ -78,11 +78,11 @@ def text_to_blocks(text: str, blocks=collections.defaultdict(list)):
       if in_comment and line.endswith(TRIPLE_QUOTE):
         line = line[:-3]
         in_comment = False
-        content[-1].append(line)
+        content[-1].append_line(line)
         content.append(Code())
         continue
       if not line.endswith('# handout: exclude'):
-        content[-1].append(line)
+        content[-1].append_line(line)
       # Add other blocks for current line, if any found.
       blocks_ = blocks[lineno]
       if blocks_:
