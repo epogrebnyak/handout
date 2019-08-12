@@ -13,16 +13,30 @@ class CodeLine(Line):
 class TextLine(Line):
     pass
 
-class Block:
+class UserBlock:
     pass
 
-class ExtendableBlock(Block):
+class Block:
+    pass
+  
+    def is_empty (self):
+        raise NotImplementedError
+
+class ExtendableBlock(Block, UserBlock):
   def __init__(self, lines=None):
+    if isinstance(lines, str):
+        lines = [lines]
     self._lines = lines or []
 
-  def add(self, line):
+  def append(self, line):
     self._lines.append(line)
-    
+
+  def extend_with(self, x):
+    self._lines = self._lines + x._lines
+
+  def is_empty(self):
+      return len(self._lines) == 0
+
   def __eq__(self, x):
     return self._lines == x._lines
     
@@ -38,6 +52,12 @@ class Code(ExtendableBlock):
 
 class Text(ExtendableBlock):
     pass
+
+@dataclass
+class Image(UserBlock):
+    filename : str
+
+
 
 PRAGMA = re.compile(r'(#\s*handout:\s*exclude)')
 
@@ -75,8 +95,9 @@ def purge(items):
 
 
 def merge(source_blocks: dict, foreign_blocks: dict):
-    for lineno, block in foreign_blocks.items():        
-        source_blocks[lineno].append(block)
+    for lineno, fblocks in foreign_blocks.items():
+        for fblock in fblocks:            
+           source_blocks[lineno].append(fblock)
     return source_blocks    
         
 
@@ -84,48 +105,70 @@ def walk(blocks):
     return [block for blocklist in blocks.values() for block in blocklist]
 
 
-def separate(items):
+def line_to_block(item):
+    if isinstance(item, CodeLine):
+        return Code([item.content])
+    elif isinstance(item, TextLine):
+        return Text([item.content])
+    else:
+        return item
+    
+def sep(items):
+    """Separate list elements into sublists based on element type."""
     result = []
-    block = [items[0]]
-    for prev, item in zip(items[:-1], items[1:]):
-        if isinstance(item, type(prev)):
-            block.append(item)
+    sublist = [items[0]]
+    for prev, item in zip(items[:-1], items[1:]):        
+        if sametype(prev, item):
+            sublist.append(item)
         else:
-            result.append(block)
-            block = [item]
-    result.append(block)        
+            result.append(sublist)
+            sublist = [item]
+    result.append(sublist)        
     return result    
 
-
-def collect(group):
-    if isinstance(group[0], CodeLine):
-        return Code([g.content for g in group])
-    elif isinstance(group[0], TextLine):
-        return Text([g.content for g in group])
-    else:
-        return group[0]
+assert sep([1,1,True, False]) ==  [[1, 1], [True, False]]
+assert sep([CodeLine("1"),CodeLine("2"),TextLine("abc")]) == [[CodeLine("1"),CodeLine("2")],[TextLine("abc")]]
    
+
+def sametype(a, b):
+    return type(a) is type(b)
+
+def collapse(xs):
+    result=[]
+    xs=iter(xs)
+    a=next(xs)
+    for b in xs:
+        if not isinstance(a, ExtendableBlock):
+            result.append(a)            
+        if isinstance(a, ExtendableBlock) and sametype(a, b):
+            a.extend_with(b)
+        else:
+            result.append(a)
+        a = b    
+    return result        
+
+def process(source_text: str, foreign_blocks):
+    xs = merge(split(source_text), foreign_blocks)
+    xs = walk(xs)
+    xs = list(map(line_to_block, xs))
+    xs = collapse(xs)
+    return xs
+
 text1 = "\n".join([
-     "#comment"
-    ,f"{TRIPLE_QUOTE}intext docsting{TRIPLE_QUOTE}"
+    f"{TRIPLE_QUOTE}one-line docsting at start{TRIPLE_QUOTE}"
     ,"def foo():"
     ,f"    {TRIPLE_QUOTE}docsting with offset{TRIPLE_QUOTE}"
     ,"    pass"
-    ,"doc.add_text(abc)"
-    ,"#some code"
-    ,"#here"
+    ,"doc = Handout('.')"    
+    ,"doc.add_text('abc'); doc.add_text('def'); doc.html('<pre>foo</pre>')"
+    ,"# some code here"
     ,f"{TRIPLE_QUOTE}"
     ,"Triple quoted string"
-    ,"(another line)"
+    ,"(on several lines)"
     ,f"{TRIPLE_QUOTE}"
     ,"print(True) #handout:exclude"])
 
-split(text1)    
-blocks = split(text1)
-foreign_blocks1 = {6: Html(['<b>abc</b>'])}
-xs1 = merge(split(text1), foreign_blocks1)
-xs2 = walk(xs1)
-xs3 = purge(xs2)    
-xs4 = list(map(collect, separate(xs3)))
-
-xs4
+foreign_blocks1 = {6: [Text('abc'), Text('def'), Html('<pre>foo</pre>'), Image("pic.png")]}
+ms = process(text1, foreign_blocks1)
+for m in ms:
+    print(m)
