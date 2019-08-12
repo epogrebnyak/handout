@@ -114,23 +114,6 @@ def line_to_block(item):
 def sametype(a, b):
     return type(a) is type(b)
 
-    
-def sep(items):
-    """Separate list elements into sublists based on element type."""
-    result = []
-    sublist = [items[0]]
-    for prev, item in zip(items[:-1], items[1:]):        
-        if sametype(prev, item):
-            sublist.append(item)
-        else:
-            result.append(sublist)
-            sublist = [item]
-    result.append(sublist)        
-    return result    
-
-assert sep([1,1,True, False]) ==  [[1, 1], [True, False]]
-assert sep([CodeLine("1"),CodeLine("2"),TextLine("abc")]) == [[CodeLine("1"),CodeLine("2")],[TextLine("abc")]]
-
 def collapse(xs):
     result=[]
     xs = list(xs)
