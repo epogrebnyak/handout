@@ -57,8 +57,6 @@ class Text(ExtendableBlock):
 class Image(UserBlock):
     filename : str
 
-
-
 PRAGMA = re.compile(r'(#\s*handout:\s*exclude)')
 
 def has_pragma(line):
@@ -112,6 +110,10 @@ def line_to_block(item):
         return Text([item.content])
     else:
         return item
+
+def sametype(a, b):
+    return type(a) is type(b)
+
     
 def sep(items):
     """Separate list elements into sublists based on element type."""
@@ -128,24 +130,23 @@ def sep(items):
 
 assert sep([1,1,True, False]) ==  [[1, 1], [True, False]]
 assert sep([CodeLine("1"),CodeLine("2"),TextLine("abc")]) == [[CodeLine("1"),CodeLine("2")],[TextLine("abc")]]
-   
-
-def sametype(a, b):
-    return type(a) is type(b)
 
 def collapse(xs):
     result=[]
-    xs=iter(xs)
-    a=next(xs)
-    for b in xs:
-        if not isinstance(a, ExtendableBlock):
-            result.append(a)            
-        if isinstance(a, ExtendableBlock) and sametype(a, b):
-            a.extend_with(b)
-        else:
-            result.append(a)
-        a = b    
-    return result        
+    xs = list(xs)
+    xs.append(Block()) #force using last element in xs    
+    a = xs[0]
+    for b in xs[1:]:
+       if not sametype(a, b) or not isinstance(a, ExtendableBlock):
+           # situation 1 - *a* cannot be extended or *a* type ended
+           result.append(a)
+           a = b 
+           continue             
+       if isinstance(a, ExtendableBlock) and sametype(a, b):
+           # situation 2 - can accumulate *a*
+           a.extend_with(b)
+           continue          
+    return result   
 
 def process(source_text: str, foreign_blocks):
     xs = merge(split(source_text), foreign_blocks)
@@ -169,6 +170,40 @@ text1 = "\n".join([
     ,"print(True) #handout:exclude"])
 
 foreign_blocks1 = {6: [Text('abc'), Text('def'), Html('<pre>foo</pre>'), Image("pic.png")]}
+xs = merge(split(text1), foreign_blocks1)
+xs = walk(xs)
+xs = list(map(line_to_block, xs))
 ms = process(text1, foreign_blocks1)
-for m in ms:
-    print(m)
+    
+ref = [
+        Text(lines=['one-line docsting at start']),
+        Code(lines=['def foo():', 
+                    '    """docsting with offset"""', 
+                    '    pass', 
+                    "doc = Handout('.')",
+                    "doc.add_text('abc'); doc.add_text('def'); doc.html('<pre>foo</pre>')"
+                    ]),
+        Text(lines=['abc', 'def']),
+        Html(lines=['<pre>foo</pre>']),
+        Image(filename='pic.png'),
+        Code(lines=['# some code here']),
+        Text(lines=['', 
+                    'Triple quoted string', 
+                    '(on several lines)', 
+                    '']),
+        Code(lines=['print(True) #handout:exclude'])
+    ]
+
+assert ref == ms
+       
+small1 = [Image(filename='pic.png'),
+ Code(lines=['# some code here']),
+ Text(lines=[''])]    
+assert collapse(small1) == [Image(filename='pic.png'), Code(lines=['# some code here']), Text(lines=[''])]
+
+
+small2 = [Text(lines=['one-line docsting at start']),
+  Code(lines=['def foo():']),
+  Code(lines=['    pass']),
+  ]
+assert collapse(small2) == [Text(lines=['one-line docsting at start']), Code(lines=['def foo():', '    pass'])]
