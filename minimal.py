@@ -11,7 +11,7 @@ doc.add_text("More text")
 """it is a comment"""
 print(1) # handout: exclude
 
-print(doc.current_line(), 8) 
-print(doc.text())
+print(doc._get_current_line(), 8) 
+print(doc._text)
 for item in doc.show():
     print(item)
