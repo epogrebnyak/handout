@@ -5,24 +5,39 @@ TRIPLE_QUOTE = '"""'
 
 @dataclass 
 class Line:
+    """Represents single line from script soucre file."""    
     content : str
 
+    def search_tag(self, tag: str):
+        found = re.search('#\s*handout:\s*{}'.format(tag), self.content)
+        return (True if found else False)
+                         
+    def must_exclude(self):
+        return self.search_tag('exclude')
+
+    def is_pragma_start(self):
+        return self.search_tag('start-exclude')
+                                 
+    def is_pragma_end(self):
+        return self.search_tag('end-exclude')
+
+    def to_block(self):
+        raise NotImplementedError                                   
+
 class CodeLine(Line):
-    pass
-
+    def to_block(self):
+        return Code(self.content)
+        
 class TextLine(Line):
-    pass
+    def to_block(self):
+        return Text(self.content)
 
-class UserBlock:
-    pass
 
 class Block:
+    """Represents a node in report."""    
     pass
-  
-    def is_empty (self):
-        raise NotImplementedError
 
-class ExtendableBlock(Block, UserBlock):
+class ExtendableBlock(Block):
   def __init__(self, lines=None):
     if isinstance(lines, str):
         lines = [lines]
@@ -31,20 +46,23 @@ class ExtendableBlock(Block, UserBlock):
   def append(self, line):
     self._lines.append(line)
 
-  def extend_with(self, x):
+  def merge(self, x): #x is ExtendableBlock
     self._lines = self._lines + x._lines
 
   def is_empty(self):
-      return len(self._lines) == 0
+    return len(self._lines) == 0
 
   def __eq__(self, x):
     return self._lines == x._lines
     
   def __repr__(self):
-     return("{}(lines={!r})".format(self.__class__.__name__, self._lines))  
+     return '{}(lines={!r})'.format(self.__class__.__name__, self._lines) 
 
 
 class Html(ExtendableBlock):
+    pass
+
+class Message(ExtendableBlock):
     pass
 
 class Code(ExtendableBlock):
@@ -54,18 +72,16 @@ class Text(ExtendableBlock):
     pass
 
 @dataclass
-class Image(UserBlock):
+class GraphicBlock(Block):
     filename : str
+    width: float = 1
 
-PRAGMA = re.compile(r'(#\s*handout:\s*exclude)')
+class Image(GraphicBlock):
+    pass
 
-def has_pragma(line):
-    return True if PRAGMA.search(line) else False
+class Video(GraphicBlock):
+    pass
 
-assert PRAGMA.search('...#handout:    exclude')
-assert has_pragma('... #handout:    exclude')
-              
-                    
 def split(text: str) -> dict:
     result = {} 
     constr = CodeLine
@@ -78,21 +94,32 @@ def split(text: str) -> dict:
         if constr == TextLine and line.endswith(TRIPLE_QUOTE):
             line = line[:-3]
             next_constr = CodeLine
-        result[lineno+1] = [constr(line)]
+        result[lineno+1] = constr(line)
         constr = next_constr
     return result 
 
-def must_exclude(item):
-    try: 
-        return (not item.content) or has_pragma(item.content)
-    except AttributeError:
-        return False
+
+def purge_comment(line_dict):
+    result = {}
+    include = True
+    for n, line in line_dict.items():        
+        if line.must_exclude():
+            continue
+        if line.is_pragma_start():
+            include = False
+        if include:
+            result[n] = line
+        if line.is_pragma_end():
+            include = True
+    return result
     
-def purge(items):
-    return [x for x in items if not must_exclude(x)]
+
+def to_blocks(line_dict):
+     return {n:[line.to_block()] for n, line in line_dict.items()}    
 
 
-def merge(source_blocks: dict, foreign_blocks: dict):
+def merge(source_line_dict: dict, foreign_blocks: dict):
+    source_blocks = to_blocks(source_line_dict)
     for lineno, fblocks in foreign_blocks.items():
         for fblock in fblocks:            
            source_blocks[lineno].append(fblock)
@@ -100,23 +127,16 @@ def merge(source_blocks: dict, foreign_blocks: dict):
         
 
 def walk(blocks):
+    """Convert nested blocks to list of blocks."""
     return [block for blocklist in blocks.values() for block in blocklist]
 
-
-def line_to_block(item):
-    if isinstance(item, CodeLine):
-        return Code([item.content])
-    elif isinstance(item, TextLine):
-        return Text([item.content])
-    else:
-        return item
 
 def sametype(a, b):
     return type(a) is type(b)
 
+
 def collapse(xs):
-    result=[]
-    xs = list(xs)
+    result = []
     xs.append(Block()) #force using last element in xs    
     a = xs[0]
     for b in xs[1:]:
@@ -126,58 +146,91 @@ def collapse(xs):
            a = b 
            continue             
        if isinstance(a, ExtendableBlock) and sametype(a, b):
-           # situation 2 - can accumulate *a*
-           a.extend_with(b)
+           # situation 2 - we can further accumulate *a*
+           a.merge(b)
            continue          
     return result   
 
 def process(source_text: str, foreign_blocks):
-    xs = merge(split(source_text), foreign_blocks)
+    # source-level    
+    lines = split(source_text)
+    lines = purge_comment(lines)
+    # block-level
+    xs = merge(lines, foreign_blocks)
     xs = walk(xs)
-    xs = list(map(line_to_block, xs))
     xs = collapse(xs)
     return xs
 
-text1 = "\n".join([
-    f"{TRIPLE_QUOTE}one-line docsting at start{TRIPLE_QUOTE}"
+def text():
+    text_lines = [
+    f"{TRIPLE_QUOTE}One-line docsting at start{TRIPLE_QUOTE}"
     ,"def foo():"
-    ,f"    {TRIPLE_QUOTE}docsting with offset{TRIPLE_QUOTE}"
+    ,f"    {TRIPLE_QUOTE}Docsting with offset{TRIPLE_QUOTE}"
     ,"    pass"
+    ,""
     ,"doc = Handout('.')"    
-    ,"doc.add_text('abc'); doc.add_text('def'); doc.html('<pre>foo</pre>')"
-    ,"# some code here"
+    ,"doc.add_text('abc'); doc.add_text('zzz')"
+    ,"doc.html('<pre>foo</pre>')"
+    ,"doc.image('pic.png')" 
+    ,"# Single comment in code"
     ,f"{TRIPLE_QUOTE}"
     ,"Triple quoted string"
     ,"(on several lines)"
     ,f"{TRIPLE_QUOTE}"
-    ,"print(True) #handout:exclude"])
+    ,"print(True) #handout:exclude"
+    ,''
+    ,'# handout: start-exclude'
+    ,'a=1'
+    ,"doc.add_text('won't print this')"
+    ,'# comment - not in handout'
+    ,f"{TRIPLE_QUOTE}Not in handout{TRIPLE_QUOTE}"
+    ,'# handout: end-exclude']
+    return '\n'.join(text_lines)
 
-foreign_blocks1 = {6: [Text('abc'), Text('def'), Html('<pre>foo</pre>'), Image("pic.png")]}
-xs = merge(split(text1), foreign_blocks1)
-xs = walk(xs)
-xs = list(map(line_to_block, xs))
-ms = process(text1, foreign_blocks1)
-    
+
+foreign_blocks1 = {7: [Text('abc'), Text('zzz')],
+                   8: [Html('<pre>foo</pre>')],
+                   9: [Image("pic.png")]}
+   
 ref = [
-        Text(lines=['one-line docsting at start']),
+        Text(lines=['One-line docsting at start']),
         Code(lines=['def foo():', 
-                    '    """docsting with offset"""', 
+                    '    """Docsting with offset"""', 
                     '    pass', 
+                    '',
                     "doc = Handout('.')",
-                    "doc.add_text('abc'); doc.add_text('def'); doc.html('<pre>foo</pre>')"
-                    ]),
-        Text(lines=['abc', 'def']),
+                    "doc.add_text('abc'); doc.add_text('zzz')"]),
+        Text(lines=['abc', 'zzz']),
+        Code(lines=["doc.html('<pre>foo</pre>')"]),
         Html(lines=['<pre>foo</pre>']),
+        Code(lines=["doc.image('pic.png')"]),
         Image(filename='pic.png'),
-        Code(lines=['# some code here']),
+        Code(lines=['# Single comment in code']),
         Text(lines=['', 
                     'Triple quoted string', 
                     '(on several lines)', 
                     '']),
-        Code(lines=['print(True) #handout:exclude'])
+        Code(lines=['']),
+        #Code(lines=['print(True) #handout:exclude'])
     ]
 
-assert ref == ms
+from itertools import zip_longest
+
+text1 = text()
+ms = process(text1, foreign_blocks1)    
+try:
+    assert ref == ms
+except AssertionError:    
+    for i, (m, r) in enumerate(zip_longest(ms, ref)):        
+        try:
+            flag = (m == r)
+        except AttributeError:
+            flag = False
+        print(i, flag)    
+        if not flag:
+            print(" Result:", m)
+            print("Compare:", r)
+    print ("Lengths:", len(ms), len(ref))
        
 small1 = [Image(filename='pic.png'),
  Code(lines=['# some code here']),
@@ -185,8 +238,10 @@ small1 = [Image(filename='pic.png'),
 assert collapse(small1) == [Image(filename='pic.png'), Code(lines=['# some code here']), Text(lines=[''])]
 
 
-small2 = [Text(lines=['one-line docsting at start']),
+small2 = [Text(lines=['One-line docsting at start']),
   Code(lines=['def foo():']),
   Code(lines=['    pass']),
   ]
-assert collapse(small2) == [Text(lines=['one-line docsting at start']), Code(lines=['def foo():', '    pass'])]
+assert collapse(small2) == [Text(lines=['One-line docsting at start']), Code(lines=['def foo():', '    pass'])]
+
+assert Line('... # handout: exclude').must_exclude() is True
