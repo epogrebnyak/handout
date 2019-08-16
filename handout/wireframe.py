@@ -1,5 +1,8 @@
+# String -> [(Int, Line)] -> [(Int, Block)] -> [(Int, Block)] -> [Block]
 import re
+from typing import List, Dict
 from dataclasses import dataclass
+
 
 TRIPLE_QUOTE = '"""'
 
@@ -8,19 +11,10 @@ class Line:
     """Represents single line from script soucre file."""    
     content : str
 
-    def search_tag(self, tag: str):
+    def has_pragma(self, tag: str):
         found = re.search('#\s*handout:\s*{}'.format(tag), self.content)
         return (True if found else False)
                          
-    def must_exclude(self):
-        return self.search_tag('exclude')
-
-    def is_pragma_start(self):
-        return self.search_tag('start-exclude')
-                                 
-    def is_pragma_end(self):
-        return self.search_tag('end-exclude')
-
     def to_block(self):
         raise NotImplementedError                                   
 
@@ -32,12 +26,11 @@ class TextLine(Line):
     def to_block(self):
         return Text(self.content)
 
-
 class Block:
     """Represents a node in report."""    
     pass
 
-class ExtendableBlock(Block):
+class TextBasedBlock(Block):
   def __init__(self, lines=None):
     if isinstance(lines, str):
         lines = [lines]
@@ -56,19 +49,19 @@ class ExtendableBlock(Block):
     return self._lines == x._lines
     
   def __repr__(self):
-     return '{}(lines={!r})'.format(self.__class__.__name__, self._lines) 
+     return '{}(lines={!r})'.format(self.__class__.__name__, self._lines)
 
 
-class Html(ExtendableBlock):
+class Html(TextBasedBlock):
     pass
 
-class Message(ExtendableBlock):
+class Message(TextBasedBlock):
     pass
 
-class Code(ExtendableBlock):
+class Code(TextBasedBlock):
     pass
 
-class Text(ExtendableBlock):
+class Text(TextBasedBlock):
     pass
 
 @dataclass
@@ -82,11 +75,17 @@ class Image(GraphicBlock):
 class Video(GraphicBlock):
     pass
 
-def split(text: str) -> dict:
+Lines = Dict[int, Line]
+UserBlocks = Dict[int, List[Block]]
+Blocks = List[Block]
+
+
+def split(text: str) -> Lines:
     result = {} 
     constr = CodeLine
     next_constr = CodeLine
     for lineno, line in enumerate(text.split('\n')):
+        line = line.rstrip()
         if constr == CodeLine and line.startswith(TRIPLE_QUOTE):
             constr = TextLine
             next_constr = TextLine
@@ -99,70 +98,70 @@ def split(text: str) -> dict:
     return result 
 
 
-def purge_comment(line_dict):
+def purge_comment(line_dict: Lines) -> Lines:
     result = {}
     include = True
     for n, line in line_dict.items():        
-        if line.must_exclude():
+        if line.has_pragma('exclude'):
             continue
-        if line.is_pragma_start():
+        if line.has_pragma('start-exclude'):
             include = False
         if include:
             result[n] = line
-        if line.is_pragma_end():
+        if line.has_pragma('end-exclude'):
             include = True
     return result
-    
-
-def to_blocks(line_dict):
-     return {n:[line.to_block()] for n, line in line_dict.items()}    
 
 
-def merge(source_line_dict: dict, foreign_blocks: dict):
-    source_blocks = to_blocks(source_line_dict)
-    for lineno, fblocks in foreign_blocks.items():
-        for fblock in fblocks:            
-           source_blocks[lineno].append(fblock)
-    return source_blocks    
-        
-
-def walk(blocks):
-    """Convert nested blocks to list of blocks."""
-    return [block for blocklist in blocks.values() for block in blocklist]
+def merge(lines: Lines, user_blocks: UserBlocks) -> [Block]:    
+    result = []
+    previous_lineno = 0
+    for lineno, line in lines.items():
+        result.append(line.to_block())
+        matching_blocks = [block for i, block in user_blocks.items()
+                           if previous_lineno < i <= lineno]
+        if matching_blocks:
+            result.extend(matching_blocks)
+        previous_lineno = lineno        
+    return result
 
 
 def sametype(a, b):
     return type(a) is type(b)
 
 
-def collapse(xs):
+def collapse(xs: [Block]) -> [Block]:
     result = []
     xs.append(Block()) #force using last element in xs    
     a = xs[0]
     for b in xs[1:]:
-       if not sametype(a, b) or not isinstance(a, ExtendableBlock):
-           # situation 1 - *a* cannot be extended or *a* type ended
-           result.append(a)
-           a = b 
-           continue             
-       if isinstance(a, ExtendableBlock) and sametype(a, b):
-           # situation 2 - we can further accumulate *a*
+       if sametype(a, b) and isinstance(a, TextBasedBlock):
+           # We can further accumulate *a*.
            a.merge(b)
-           continue          
+       else:
+           result.append(a)
+           a = b
     return result   
 
-def process(source_text: str, foreign_blocks):
-    # source-level    
+    
+def get_blocks(source_text: str, user_blocks: UserBlocks) -> Blocks:
     lines = split(source_text)
     lines = purge_comment(lines)
-    # block-level
-    xs = merge(lines, foreign_blocks)
-    xs = walk(xs)
-    xs = collapse(xs)
-    return xs
+    blocks = merge(lines, user_blocks)
+    return collapse(blocks)
+
+
+TC = '"""' 
+source_text = "\n".join([
+    TC + "Docstring text" + TC,
+    "doc=Handout('tmp')",
+    "doc.add_text('My comment')"
+]) 
+user_blocks = {3: [Message('My comment')]}
+x = get_blocks(source_text, user_blocks)
 
 def sample_text():
-    text_lines = [
+    return '\n'.join([
     f"{TRIPLE_QUOTE}One-line docsting at start{TRIPLE_QUOTE}"
     ,"def foo():"
     ,f"    {TRIPLE_QUOTE}Docsting with offset{TRIPLE_QUOTE}"
@@ -186,14 +185,15 @@ def sample_text():
     ,f"{TRIPLE_QUOTE}Not in handout{TRIPLE_QUOTE}"
     ,'# handout: end-exclude'
     ,"print('I am back again)"]
-    return '\n'.join(text_lines)
+    )
 
 
-foreign_blocks1 = {7: [Text('abc'), Text('zzz')],
-                   8: [Html('<pre>foo</pre>')],
-                   9: [Image("pic.png")]}
-   
-ref = [
+user_blocks = {7: [Text('abc'), Text('zzz')],
+               8: [Html('<pre>foo</pre>')],
+               9: [Image("pic.png")]}
+
+source_text = sample_text()
+assert get_blocks(source_text, user_blocks) == [
         Text(lines=['One-line docsting at start']),
         Code(lines=['def foo():', 
                     '    """Docsting with offset"""', 
@@ -213,35 +213,3 @@ ref = [
                     '']),
         Code(lines=['', "print('I am back again)"])
     ]
-
-from itertools import zip_longest
-
-text1 = sample_text()
-ms = process(text1, foreign_blocks1)    
-try:
-    assert ref == ms
-except AssertionError:    
-    for i, (m, r) in enumerate(zip_longest(ms, ref)):        
-        try:
-            flag = (m == r)
-        except AttributeError:
-            flag = False
-        print(i, flag)    
-        if not flag:
-            print(" Result:", m)
-            print("Compare:", r)
-    print ("Lengths:", len(ms), len(ref))
-       
-small1 = [Image(filename='pic.png'),
- Code(lines=['# some code here']),
- Text(lines=[''])]    
-assert collapse(small1) == [Image(filename='pic.png'), Code(lines=['# some code here']), Text(lines=[''])]
-
-
-small2 = [Text(lines=['One-line docsting at start']),
-  Code(lines=['def foo():']),
-  Code(lines=['    pass']),
-  ]
-assert collapse(small2) == [Text(lines=['One-line docsting at start']), Code(lines=['def foo():', '    pass'])]
-
-assert Line('... # handout: exclude').must_exclude() is True
